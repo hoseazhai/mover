@@ -15,7 +15,15 @@ limitations under the License.
 */
 package main
 
-import "github.com/hoseazhai/mover/cmd"
+import (
+	"github.com/hoseazhai/mover/cmd"
+	"math/rand"
+	"time"
+)
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 
 func main() {
 	cmd.Execute()

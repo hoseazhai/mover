@@ -16,15 +16,28 @@ limitations under the License.
 package cmd
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/hoseazhai/mover/cloud"
+	"github.com/hoseazhai/mover/commons/utils"
 	"github.com/spf13/cobra"
+	"io/ioutil"
+	"net/http"
 	"os"
+	"regexp"
+	"strings"
 
 	homedir "github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
 )
 
-var cfgFile string
+var (
+	cfgFile  string
+	postPath string
+)
+
+//const signImg = "sinaimg.cn"
+const signImg = "png"
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -62,6 +75,8 @@ func init() {
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+
+	rootCmd.PersistentFlags().StringVarP(&postPath, "post", "p", "./", "指定markdown文件路径")
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -88,4 +103,93 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		fmt.Println("Using config file:", viper.ConfigFileUsed())
 	}
+}
+
+// StartMove ... 开始执行迁移程序
+func StartMover(uploader cloud.Uploader) {
+	// 获取所以的md文件
+	files, err := utils.GetAllFiles(postPath)
+	if err != nil {
+		fmt.Printf("获取markdown文件出错了：%v\n", err)
+		return
+	}
+	for _, file := range files {
+		err := parseFile(file, postPath, uploader)
+		if err != nil {
+			fmt.Printf("解析文件：%s 出错了：%v \n", file, err)
+			continue
+		}
+	}
+}
+
+func parseFile(filePath, postpath string, uploader cloud.Uploader) error {
+	bt, err := ioutil.ReadFile(filePath)
+	if err != nil {
+		return err
+	}
+	// 获取文件内容
+	content := string(bt)
+	reg := regexp.MustCompile(`!\[.*?\]\((.*?)\)|<img.*?src=[\'\"](.*?)[\'\"].*?>`)
+	params := reg.FindAllStringSubmatch(content, -1)
+	// 获取所以的图片
+	for _, param := range params {
+		imgURL := param[1]
+		// 微博图床才处理
+		if strings.Index(imgURL, signImg) != -1 && strings.Index(imgURL, "http") == -1 {
+			fmt.Printf("https://%s.%s%s\n", ossBucket, ossEndpoint, imgURL)
+
+			imgName := strings.Split(imgURL, "/")[2]
+			imgParamsURL := fmt.Sprintf("images/%s", imgName)
+			url := "D:\\docs\\" + imgParamsURL
+			f, err := ioutil.ReadFile(url)
+			if err != nil {
+				fmt.Println("Error: 读取文件", err)
+				os.Exit(-1)
+			}
+			fmt.Printf("imgParamsURL : %s", imgParamsURL)
+			cloudURL := fmt.Sprintf("https://%s.%s/%s", ossBucket, ossEndpoint, imgParamsURL)
+			key, err := uploader.Uploader(imgParamsURL, bytes.NewReader(f))
+			fmt.Println(key, "==========")
+
+			//cloudURL, err := uploadToCloud(imgURL, uploader)
+			if err != nil {
+				fmt.Printf("图片： %s 转换出错：%v \n", cloudURL, err)
+				continue
+			}
+			newContent := strings.Replace(content, imgURL, cloudURL, -1)
+			// 重新写入文件
+			ioutil.WriteFile(filePath, []byte(newContent), 0)
+			content = newContent
+			fmt.Printf("图片：%s 替换成功\n", imgURL)
+		} else if strings.Index(imgURL, "http") != -1 {
+			cloudURL, err := uploadToCloud(imgURL, uploader)
+			if err != nil {
+				fmt.Printf("图片： %s 转换出错：%v \n", cloudURL, err)
+				continue
+			}
+			newContent := strings.Replace(content, imgURL, cloudURL, -1)
+			// 重新写入文件
+			ioutil.WriteFile(filePath, []byte(newContent), 0)
+			content = newContent
+			fmt.Printf("图片：%s 替换成功\n", imgURL)
+		}
+	}
+	return nil
+}
+
+func uploadToCloud(url string, uploader cloud.Uploader) (string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	objectKey := fmt.Sprintf("images/%s", utils.RandID(8))
+	key, err := uploader.Uploader(objectKey, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("https://%s.%s.%s", ossBucket, ossEndpoint, key), nil
 }
