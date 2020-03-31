@@ -24,10 +24,12 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 
-	homedir "github.com/mitchellh/go-homedir"
+	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
 )
 
@@ -114,7 +116,7 @@ func StartMover(uploader cloud.Uploader) {
 		return
 	}
 	for _, file := range files {
-		err := parseFile(file, postPath, uploader)
+		err := parseFile(file, uploader)
 		if err != nil {
 			fmt.Printf("解析文件：%s 出错了：%v \n", file, err)
 			continue
@@ -122,11 +124,12 @@ func StartMover(uploader cloud.Uploader) {
 	}
 }
 
-func parseFile(filePath, postpath string, uploader cloud.Uploader) error {
+func parseFile(filePath string, uploader cloud.Uploader) error {
 	bt, err := ioutil.ReadFile(filePath)
 	if err != nil {
 		return err
 	}
+	sep := string(os.PathSeparator)
 	// 获取文件内容
 	content := string(bt)
 	reg := regexp.MustCompile(`!\[.*?\]\((.*?)\)|<img.*?src=[\'\"](.*?)[\'\"].*?>`)
@@ -136,20 +139,26 @@ func parseFile(filePath, postpath string, uploader cloud.Uploader) error {
 		imgURL := param[1]
 		// 微博图床才处理
 		if strings.Index(imgURL, signImg) != -1 && strings.Index(imgURL, "http") == -1 {
-			fmt.Printf("https://%s.%s%s\n", ossBucket, ossEndpoint, imgURL)
+			absUrl := strings.Replace(filePath, "\\", "/", -1)
+			fmt.Println(filePath)
 
-			imgName := strings.Split(imgURL, "/")[2]
+			imgName := path.Base(imgURL)
+			relPath := path.Dir(imgURL)
+			absPath := path.Dir(absUrl)
+
+			tempPath := absPath + sep + relPath
+			imgPath, _ := filepath.Abs(tempPath)
+
 			imgParamsURL := fmt.Sprintf("images/%s", imgName)
-			url := "D:\\docs\\" + imgParamsURL
+			url := imgPath + sep + imgName
 			f, err := ioutil.ReadFile(url)
 			if err != nil {
 				fmt.Println("Error: 读取文件", err)
 				os.Exit(-1)
 			}
-			fmt.Printf("imgParamsURL : %s", imgParamsURL)
 			cloudURL := fmt.Sprintf("https://%s.%s/%s", ossBucket, ossEndpoint, imgParamsURL)
 			key, err := uploader.Uploader(imgParamsURL, bytes.NewReader(f))
-			fmt.Println(key, "==========")
+			fmt.Println("objectKey", key, "==========")
 
 			//cloudURL, err := uploadToCloud(imgURL, uploader)
 			if err != nil {
